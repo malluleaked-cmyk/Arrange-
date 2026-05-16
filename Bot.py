@@ -4,12 +4,14 @@ import time
 import requests
 import telebot
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-API_ENDPOINT = "https://YOUR_API.com/api"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_ENDPOINT = os.getenv("API_ENDPOINT", "https://YOUR_API.com/api")
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN missing in Railway Variables")
 
 ADMIN_IDS = [6630347046, 7194569468]
 DOWNLOAD_DIR = "downloads"
-
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=10)
@@ -20,35 +22,18 @@ def is_admin(user_id):
 
 
 def extract_surl(url):
-    patterns = [
-        r"/s/([A-Za-z0-9_-]+)",
-        r"surl=([A-Za-z0-9_-]+)"
-    ]
+    match = re.search(r"/s/([A-Za-z0-9_-]+)", url)
+    if not match:
+        return None
 
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            code = match.group(1)
-
-            # TeraShare link usually starts with 1
-            if code.startswith("1"):
-                code = code[1:]
-
-            return code
-
-    return None
+    code = match.group(1)
+    if code.startswith("1"):
+        code = code[1:]
+    return code
 
 
 def safe_name(name):
     return re.sub(r'[\\/:*?"<>|]', "_", name)
-
-
-def human_size(size):
-    for unit in ["B", "KB", "MB", "GB"]:
-        if size < 1024:
-            return f"{round(size, 2)} {unit}"
-        size /= 1024
-    return f"{round(size, 2)} TB"
 
 
 def resolve_terabox(url):
@@ -66,8 +51,8 @@ def resolve_terabox(url):
             return {"ok": False, "message": "API resolve failed"}
 
         file_data = data.get("data", {})
-
         download_url = file_data.get("download_url")
+
         if not download_url:
             return {"ok": False, "message": "download_url missing"}
 
@@ -82,19 +67,14 @@ def resolve_terabox(url):
         return {"ok": False, "message": str(e)}
 
 
-def download_file(url, file_path):
+def download_file(url, path):
     with requests.get(url, stream=True, timeout=300) as r:
         r.raise_for_status()
 
-        total = 0
-
-        with open(file_path, "wb") as f:
+        with open(path, "wb") as f:
             for chunk in r.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
-                    total += len(chunk)
-
-        return total
 
 
 @bot.message_handler(commands=["start"])
@@ -103,11 +83,7 @@ def start(message):
         bot.reply_to(message, "❌ Admin only bot")
         return
 
-    bot.reply_to(
-        message,
-        "🔥 TeraBox Video Bot Ready\n\n"
-        "TeraBox / TeraShare link അയക്കൂ 😺"
-    )
+    bot.reply_to(message, "🔥 TeraBox Bot Ready\n\nLink അയക്കൂ 😺")
 
 
 @bot.message_handler(func=lambda m: True)
@@ -139,37 +115,24 @@ def handle_link(message):
 
     try:
         bot.edit_message_text(
-            f"✅ File Found\n\n"
-            f"📄 {file_name}\n"
-            f"📦 {result['size']}\n\n"
-            f"⬇️ Downloading...",
+            f"✅ File Found\n\n📄 {file_name}\n📦 {result['size']}\n\n⬇️ Downloading...",
             message.chat.id,
             status.message_id
         )
 
-        start_time = time.time()
-
-        total_size = download_file(
-            result["download_url"],
-            file_path
-        )
-
-        taken = round(time.time() - start_time, 2)
+        download_file(result["download_url"], file_path)
 
         bot.edit_message_text(
-            f"✅ Download Complete\n\n"
-            f"📦 {human_size(total_size)}\n"
-            f"⚡ {taken}s\n\n"
-            f"🚀 Uploading video...",
+            "✅ Download Complete\n\n🚀 Uploading video...",
             message.chat.id,
             status.message_id
         )
 
         with open(file_path, "rb") as video:
             bot.send_video(
-                chat_id=message.chat.id,
-                video=video,
-                caption=f"🔥 {file_name}\n\n⚡ Uploaded by bot",
+                message.chat.id,
+                video,
+                caption=f"🔥 {file_name}",
                 supports_streaming=True
             )
 
@@ -193,4 +156,4 @@ bot.infinity_polling(
     skip_pending=True,
     timeout=60,
     long_polling_timeout=60
-      )
+)
